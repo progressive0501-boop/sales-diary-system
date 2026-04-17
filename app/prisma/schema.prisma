@@ -1,0 +1,119 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 営業担当者
+// ─────────────────────────────────────────────────────────────────────────────
+model Salesperson {
+  id           Int      @id @default(autoincrement())
+  name         String   @db.VarChar(100)
+  email        String   @unique @db.VarChar(255)
+  passwordHash String   @map("password_hash")
+  department   String?  @db.VarChar(100)
+  isManager    Boolean  @default(false) @map("is_manager")
+  managerId    Int?     @map("manager_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // 自己参照リレーション（上長↔部下）
+  manager      Salesperson?  @relation("ManagerSubordinates", fields: [managerId], references: [id], onDelete: SetNull)
+  subordinates Salesperson[] @relation("ManagerSubordinates")
+
+  // 他テーブルへの参照
+  dailyReports DailyReport[]
+  customers    Customer[]
+  comments     Comment[]
+
+  @@map("salespersons")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 顧客
+// ─────────────────────────────────────────────────────────────────────────────
+model Customer {
+  id                    Int      @id @default(autoincrement())
+  name                  String   @db.VarChar(100)
+  company               String   @db.VarChar(200)
+  phone                 String?  @db.VarChar(20)
+  address               String?  @db.VarChar(300)
+  assignedSalespersonId Int      @map("assigned_salesperson_id")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  assignedSalesperson Salesperson   @relation(fields: [assignedSalespersonId], references: [id], onDelete: Restrict)
+  visitRecords        VisitRecord[]
+
+  @@map("customers")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 日報
+// ─────────────────────────────────────────────────────────────────────────────
+model DailyReport {
+  id            Int      @id @default(autoincrement())
+  salespersonId Int      @map("salesperson_id")
+  reportDate    DateTime @map("report_date") @db.Date
+  problem       String?  @db.Text
+  plan          String?  @db.Text
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  salesperson  Salesperson   @relation(fields: [salespersonId], references: [id], onDelete: Restrict)
+  visitRecords VisitRecord[]
+  comments     Comment[]
+
+  // 同一営業・同日の重複禁止（test-spec: RPT-003-4 "同日分の日報を重複作成 → 409"）
+  @@unique([salespersonId, reportDate])
+  @@map("daily_reports")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 訪問記録
+// ─────────────────────────────────────────────────────────────────────────────
+model VisitRecord {
+  id           Int      @id @default(autoincrement())
+  reportId     Int      @map("report_id")
+  customerId   Int      @map("customer_id")
+  visitContent String   @db.VarChar(1000) @map("visit_content")
+  visitOrder   Int      @map("visit_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // 日報削除時に訪問記録も削除（PUT /reports で差し替え更新するため Cascade）
+  report   DailyReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  customer Customer    @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@map("visit_records")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// コメント対象種別
+// ─────────────────────────────────────────────────────────────────────────────
+enum CommentTargetType {
+  PROBLEM
+  PLAN
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// コメント（上長が日報の Problem / Plan に投稿）
+// ─────────────────────────────────────────────────────────────────────────────
+model Comment {
+  id          Int               @id @default(autoincrement())
+  reportId    Int               @map("report_id")
+  targetType  CommentTargetType @map("target_type")
+  commenterId Int               @map("commenter_id")
+  content     String            @db.Text
+  createdAt   DateTime          @default(now()) @map("created_at")
+  updatedAt   DateTime          @updatedAt @map("updated_at")
+
+  // 日報削除時にコメントも削除
+  report    DailyReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  commenter Salesperson @relation(fields: [commenterId], references: [id], onDelete: Restrict)
+
+  @@map("comments")
+}
