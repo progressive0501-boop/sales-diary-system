@@ -1,7 +1,11 @@
 import type { NextRequest } from "next/server";
+import { Prisma } from "@prisma/client";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { ReportListQuerySchema } from "@/lib/schemas/reports";
+import {
+  ReportListQuerySchema,
+  CreateReportRequestSchema,
+} from "@/lib/schemas/reports";
 
 export async function GET(request: NextRequest) {
   // ── 1. セッション確認 ────────────────────────────────────────────────────
@@ -126,4 +130,131 @@ export async function GET(request: NextRequest) {
       },
     },
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/reports — 日報作成（営業ユーザーのみ）
+// ─────────────────────────────────────────────────────────────────────────────
+export async function POST(request: NextRequest) {
+  // ── 1. セッション確認 ────────────────────────────────────────────────────
+  const session = await getSession();
+  if (!session) {
+    return Response.json(
+      {
+        success: false,
+        error: { code: "UNAUTHORIZED", message: "認証が必要です" },
+      },
+      { status: 401 },
+    );
+  }
+
+  // ── 2. 上長は作成不可 ────────────────────────────────────────────────────
+  if (session.is_manager) {
+    return Response.json(
+      {
+        success: false,
+        error: { code: "FORBIDDEN", message: "上長ユーザーは日報を作成できません" },
+      },
+      { status: 403 },
+    );
+  }
+
+  // ── 3. リクエストボディ検証 ──────────────────────────────────────────────
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json(
+      {
+        success: false,
+        error: { code: "VALIDATION_ERROR", message: "リクエストボディが不正です" },
+      },
+      { status: 400 },
+    );
+  }
+
+  const parsed = CreateReportRequestSchema.safeParse(body);
+  if (!parsed.success) {
+    return Response.json(
+      {
+        success: false,
+        error: { code: "VALIDATION_ERROR", message: parsed.error.message },
+      },
+      { status: 400 },
+    );
+  }
+
+  const { report_date, problem, plan, visit_records } = parsed.data;
+
+  // ── 4. customer_id の存在確認 ────────────────────────────────────────────
+  const customerIds = [...new Set(visit_records.map((vr) => vr.customer_id))];
+  const existingCount = await prisma.customer.count({
+    where: { id: { in: customerIds } },
+  });
+  if (existingCount !== customerIds.length) {
+    return Response.json(
+      {
+        success: false,
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "指定された顧客IDが存在しません",
+        },
+      },
+      { status: 400 },
+    );
+  }
+
+  // ── 5. トランザクションで日報・訪問記録を保存 ────────────────────────────
+  try {
+    const report = await prisma.$transaction(async (tx) => {
+      const created = await tx.dailyReport.create({
+        data: {
+          salespersonId: session.id,
+          reportDate: new Date(report_date),
+          problem: problem ?? null,
+          plan: plan ?? null,
+        },
+      });
+
+      await tx.visitRecord.createMany({
+        data: visit_records.map((vr) => ({
+          reportId: created.id,
+          customerId: vr.customer_id,
+          visitContent: vr.visit_content,
+          visitOrder: vr.visit_order,
+        })),
+      });
+
+      return created;
+    });
+
+    return Response.json(
+      {
+        success: true,
+        data: {
+          id: report.id,
+          report_date: report.reportDate.toISOString().split("T")[0],
+        },
+      },
+      { status: 201 },
+    );
+  } catch (err) {
+    // 同日の日報が既に存在 (salespersonId, reportDate) unique 制約違反
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2002"
+    ) {
+      return Response.json(
+        {
+          success: false,
+          error: {
+            code: "CONFLICT",
+            message: "同日の日報が既に存在します",
+          },
+        },
+        { status: 409 },
+      );
+    }
+    throw err;
+  }
 }
