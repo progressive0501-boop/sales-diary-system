@@ -10,7 +10,15 @@
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage --passWithNoTests",
-    "prepare": "cd .. && husky app/.husky"
+    "prepare": "cd .. && husky app/.husky",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:push": "prisma db push",
+    "db:seed": "prisma db seed",
+    "db:studio": "prisma studio"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   },
   "lint-staged": {
     "src/**/*.{ts,tsx}": [
@@ -20,12 +28,18 @@
   "dependencies": {
     "@base-ui/react": "^1.4.0",
     "@hookform/resolvers": "^5.2.2",
+    "@prisma/adapter-pg": "^7.7.0",
+    "@prisma/client": "^7.7.0",
+    "bcryptjs": "^3.0.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "dotenv": "^17.4.2",
     "jose": "^6.2.2",
     "lucide-react": "^1.8.0",
     "next": "16.2.3",
     "next-themes": "^0.4.6",
+    "pg": "^8.20.0",
+    "prisma": "^7.7.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-hook-form": "^7.72.1",
@@ -37,10 +51,13 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20",
+    "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6.0.1",
@@ -52,6 +69,7 @@
     "jsdom": "^29.0.2",
     "lint-staged": "^16.4.0",
     "tailwindcss": "^4",
+    "tsx": "^4.19.4",
     "typescript": "^5",
     "vercel": "^51.2.1",
     "vitest": "^4.1.4",
