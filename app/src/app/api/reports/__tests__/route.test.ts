@@ -4,11 +4,14 @@ import { NextRequest } from "next/server";
 
 // ── モック ────────────────────────────────────────────────────────────────────
 
-const { mockGetSession, mockFindMany, mockCount } = vi.hoisted(() => ({
-  mockGetSession: vi.fn(),
-  mockFindMany: vi.fn(),
-  mockCount: vi.fn(),
-}));
+const { mockGetSession, mockFindMany, mockCount, mockCustomerCount, mockTransaction } =
+  vi.hoisted(() => ({
+    mockGetSession: vi.fn(),
+    mockFindMany: vi.fn(),
+    mockCount: vi.fn(),
+    mockCustomerCount: vi.fn(),
+    mockTransaction: vi.fn(),
+  }));
 
 vi.mock("@/lib/auth/session", () => ({ getSession: mockGetSession }));
 
@@ -16,10 +19,12 @@ vi.mock("@/lib/db", () => ({
   prisma: {
     salesperson: { findMany: mockFindMany },
     dailyReport: { findMany: mockFindMany, count: mockCount },
+    customer: { count: mockCustomerCount },
+    $transaction: mockTransaction,
   },
 }));
 
-import { GET } from "../route";
+import { GET, POST } from "../route";
 
 // ── テスト用データ ────────────────────────────────────────────────────────────
 
@@ -225,5 +230,172 @@ describe("GET /api/reports - バリデーションエラー", () => {
 
     expect(res.status).toBe(400);
     expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/reports テスト
+// ─────────────────────────────────────────────────────────────────────────────
+
+const validBody = {
+  report_date: "2026-04-17",
+  problem: "課題テスト",
+  plan: "計画テスト",
+  visit_records: [
+    { customer_id: 1, visit_content: "訪問内容1", visit_order: 1 },
+  ],
+};
+
+function makePostRequest(body: unknown) {
+  return new NextRequest(new URL(`${BASE_URL}/api/reports`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+describe("POST /api/reports - 正常系", () => {
+  test("日報が作成され 201 と { id, report_date } が返る (RPT-003-1)", async () => {
+    mockGetSession.mockResolvedValue(salesSession);
+    mockCustomerCount.mockResolvedValue(1);
+    const createdReport = {
+      id: 201,
+      reportDate: new Date("2026-04-17"),
+    };
+    mockTransaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        dailyReport: {
+          create: vi.fn().mockResolvedValue(createdReport),
+        },
+        visitRecord: {
+          createMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      };
+      return fn(tx);
+    });
+
+    const res = await POST(makePostRequest(validBody));
+    const body = await res.json();
+
+    expect(res.status).toBe(201);
+    expect(body.success).toBe(true);
+    expect(body.data.id).toBe(201);
+    expect(body.data.report_date).toBe("2026-04-17");
+  });
+
+  test("visit_records が複数件でも正常に作成される (RPT-003-2)", async () => {
+    mockGetSession.mockResolvedValue(salesSession);
+    mockCustomerCount.mockResolvedValue(2);
+    const createdReport = { id: 202, reportDate: new Date("2026-04-17") };
+    mockTransaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        dailyReport: { create: vi.fn().mockResolvedValue(createdReport) },
+        visitRecord: { createMany: vi.fn().mockResolvedValue({ count: 2 }) },
+      };
+      return fn(tx);
+    });
+
+    const body2 = {
+      ...validBody,
+      visit_records: [
+        { customer_id: 1, visit_content: "訪問内容1", visit_order: 1 },
+        { customer_id: 2, visit_content: "訪問内容2", visit_order: 2 },
+      ],
+    };
+
+    const res = await POST(makePostRequest(body2));
+    expect(res.status).toBe(201);
+  });
+});
+
+describe("POST /api/reports - 認証・権限エラー", () => {
+  test("未認証で 401 UNAUTHORIZED が返る (RPT-003-3)", async () => {
+    mockGetSession.mockResolvedValue(null);
+
+    const res = await POST(makePostRequest(validBody));
+    const body = await res.json();
+
+    expect(res.status).toBe(401);
+    expect(body.error.code).toBe("UNAUTHORIZED");
+  });
+
+  test("上長ユーザーは 403 FORBIDDEN が返る (RPT-003-manager)", async () => {
+    mockGetSession.mockResolvedValue(managerSession);
+
+    const res = await POST(makePostRequest(validBody));
+    const body = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(body.error.code).toBe("FORBIDDEN");
+  });
+});
+
+describe("POST /api/reports - バリデーションエラー", () => {
+  test("リクエストボディが不正な JSON で 400 が返る", async () => {
+    mockGetSession.mockResolvedValue(salesSession);
+
+    const req = new NextRequest(new URL(`${BASE_URL}/api/reports`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "not-json{{{",
+    });
+
+    const res = await POST(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  test("report_date が YYYY-MM-DD 形式でない場合 400 が返る", async () => {
+    mockGetSession.mockResolvedValue(salesSession);
+
+    const res = await POST(makePostRequest({ ...validBody, report_date: "2026/04/17" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  test("visit_records が空配列の場合 400 が返る", async () => {
+    mockGetSession.mockResolvedValue(salesSession);
+
+    const res = await POST(makePostRequest({ ...validBody, visit_records: [] }));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  test("存在しない customer_id を指定すると 400 が返る (RPT-003-5)", async () => {
+    mockGetSession.mockResolvedValue(salesSession);
+    mockCustomerCount.mockResolvedValue(0); // 0件ヒット → 存在しない
+
+    const res = await POST(makePostRequest(validBody));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.message).toMatch(/顧客ID/);
+  });
+});
+
+describe("POST /api/reports - 重複エラー", () => {
+  test("同日の日報が既に存在する場合 409 CONFLICT が返る (RPT-003-4)", async () => {
+    mockGetSession.mockResolvedValue(salesSession);
+    mockCustomerCount.mockResolvedValue(1);
+
+    const { Prisma } = await import("@prisma/client");
+    const p2002Error = new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+      code: "P2002",
+      clientVersion: "0.0.0",
+    });
+    mockTransaction.mockRejectedValue(p2002Error);
+
+    const res = await POST(makePostRequest(validBody));
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.error.code).toBe("CONFLICT");
   });
 });
