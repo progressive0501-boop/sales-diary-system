@@ -95,22 +95,22 @@ function FormLabel({
   );
 }
 
-function FormControl({ ...props }: React.ComponentProps<"div">) {
+function FormControl({
+  children,
+}: {
+  children: React.ReactElement<React.HTMLAttributes<HTMLElement>>;
+}) {
   const { error, formItemId, formDescriptionId, formMessageId } =
     useFormField();
 
-  return (
-    <div
-      id={formItemId}
-      aria-describedby={
-        !error
-          ? `${formDescriptionId}`
-          : `${formDescriptionId} ${formMessageId}`
-      }
-      aria-invalid={!!error}
-      {...props}
-    />
-  );
+  // id を子要素（Input等）に直接注入することで label[for] と input[id] を紐付ける
+  return React.cloneElement(children, {
+    id: formItemId,
+    "aria-describedby": !error
+      ? formDescriptionId
+      : `${formDescriptionId} ${formMessageId}`,
+    "aria-invalid": !!error || undefined,
+  });
 }
 
 function FormDescription({ className, ...props }: React.ComponentProps<"p">) {
