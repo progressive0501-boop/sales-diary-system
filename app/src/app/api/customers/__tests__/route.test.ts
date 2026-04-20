@@ -91,6 +91,10 @@ describe("GET /api/customers - 正常系 (CST-001)", () => {
     expect(res.status).toBe(200);
     expect(body.data.items).toHaveLength(1);
     expect(body.data.items[0].name).toBe("佐藤 花子");
+    // Prisma の where 句が name の部分一致検索を含むことを確認
+    const whereArg = mockFindMany.mock.calls[0][0].where;
+    expect(whereArg.OR).toBeDefined();
+    expect(whereArg.OR[0].name.contains).toBe("佐藤");
   });
 
   test("q=株式会社A で会社名検索できる (CST-001-3)", async () => {
@@ -104,6 +108,10 @@ describe("GET /api/customers - 正常系 (CST-001)", () => {
     expect(res.status).toBe(200);
     expect(body.data.items).toHaveLength(1);
     expect(body.data.items[0].company).toBe("株式会社A");
+    // Prisma の where 句が company の部分一致検索を含むことを確認
+    const whereArg = mockFindMany.mock.calls[0][0].where;
+    expect(whereArg.OR).toBeDefined();
+    expect(whereArg.OR[1].company.contains).toBe("株式会社A");
   });
 
   test("検索結果0件のとき items: [] が返る (CST-001-4)", async () => {
