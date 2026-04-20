@@ -134,8 +134,9 @@ describe("GET /api/reports/[id]/comments - 正常系", () => {
     ]);
 
     const res = await GET(makeRequest("101"), makeParams("101"));
+    const body = await res.json();
     expect(res.status).toBe(200);
-    expect(body => body).toBeDefined();
+    expect(body.data.problem).toHaveLength(1);
   });
 
   test("created_at が ISO 形式で含まれる", async () => {
