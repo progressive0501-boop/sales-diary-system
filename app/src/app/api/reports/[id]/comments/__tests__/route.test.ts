@@ -4,21 +4,22 @@ import { NextRequest } from "next/server";
 
 // ── モック ────────────────────────────────────────────────────────────────────
 
-const { mockGetSession, mockFindUnique, mockFindMany } = vi.hoisted(() => ({
+const { mockGetSession, mockFindUnique, mockFindMany, mockCreate } = vi.hoisted(() => ({
   mockGetSession: vi.fn(),
   mockFindUnique: vi.fn(),
   mockFindMany: vi.fn(),
+  mockCreate: vi.fn(),
 }));
 
 vi.mock("@/lib/auth/session", () => ({ getSession: mockGetSession }));
 vi.mock("@/lib/db", () => ({
   prisma: {
     dailyReport: { findUnique: mockFindUnique },
-    comment: { findMany: mockFindMany },
+    comment: { findMany: mockFindMany, create: mockCreate },
   },
 }));
 
-import { GET } from "../route";
+import { GET, POST } from "../route";
 
 // ── テスト用データ ────────────────────────────────────────────────────────────
 
@@ -213,6 +214,204 @@ describe("GET /api/reports/[id]/comments - 404 / 401", () => {
     mockGetSession.mockResolvedValue(null);
 
     const res = await GET(makeRequest("101"), makeParams("101"));
+    const body = await res.json();
+
+    expect(res.status).toBe(401);
+    expect(body.error.code).toBe("UNAUTHORIZED");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/reports/[id]/comments テスト
+// ─────────────────────────────────────────────────────────────────────────────
+
+function makePostRequest(id: string, body: unknown) {
+  return new NextRequest(`${BASE_URL}/api/reports/${id}/comments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+// 上長セッション: id=1, managerId が reportStub.salesperson.managerId=1 と一致
+const reportForManager = {
+  salesperson: { managerId: 1 },
+};
+
+function makeCreatedComment(targetType: "problem" | "plan") {
+  return {
+    id: 301,
+    reportId: 101,
+    targetType: targetType.toUpperCase() as "PROBLEM" | "PLAN",
+    commenterId: 1,
+    content: "テストコメント",
+    createdAt: new Date("2026-04-10T12:00:00Z"),
+    commenter: { name: "鈴木 部長" },
+  };
+}
+
+describe("POST /api/reports/[id]/comments - 正常系", () => {
+  test("上長が problem にコメントを投稿すると 201 Created (CMT-002-1)", async () => {
+    mockGetSession.mockResolvedValue(managerSession);
+    mockFindUnique.mockResolvedValue(reportForManager);
+    mockCreate.mockResolvedValue(makeCreatedComment("problem"));
+
+    const res = await POST(
+      makePostRequest("101", { target_type: "problem", content: "テストコメント" }),
+      makeParams("101"),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(201);
+    expect(body.success).toBe(true);
+    expect(body.data).toMatchObject({
+      id: 301,
+      report_id: 101,
+      target_type: "problem",
+      commenter_id: 1,
+      commenter_name: "鈴木 部長",
+      content: "テストコメント",
+    });
+    expect(body.data.created_at).toBeDefined();
+  });
+
+  test("上長が plan にコメントを投稿すると 201 Created (CMT-002-2)", async () => {
+    mockGetSession.mockResolvedValue(managerSession);
+    mockFindUnique.mockResolvedValue(reportForManager);
+    mockCreate.mockResolvedValue(makeCreatedComment("plan"));
+
+    const res = await POST(
+      makePostRequest("101", { target_type: "plan", content: "計画コメント" }),
+      makeParams("101"),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(201);
+    expect(body.data.target_type).toBe("plan");
+  });
+
+  test("同一日報に複数コメントを投稿できる (CMT-002-3)", async () => {
+    mockGetSession.mockResolvedValue(managerSession);
+    mockFindUnique.mockResolvedValue(reportForManager);
+    mockCreate
+      .mockResolvedValueOnce(makeCreatedComment("problem"))
+      .mockResolvedValueOnce({ ...makeCreatedComment("problem"), id: 302 });
+
+    const res1 = await POST(
+      makePostRequest("101", { target_type: "problem", content: "1件目" }),
+      makeParams("101"),
+    );
+    const res2 = await POST(
+      makePostRequest("101", { target_type: "problem", content: "2件目" }),
+      makeParams("101"),
+    );
+
+    expect(res1.status).toBe(201);
+    expect(res2.status).toBe(201);
+  });
+});
+
+describe("POST /api/reports/[id]/comments - 権限エラー", () => {
+  test("営業ユーザーが投稿すると 403 FORBIDDEN (CMT-002-4)", async () => {
+    mockGetSession.mockResolvedValue(salesSession);
+
+    const res = await POST(
+      makePostRequest("101", { target_type: "problem", content: "コメント" }),
+      makeParams("101"),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(body.error.code).toBe("FORBIDDEN");
+  });
+
+  test("配下外の日報へのコメントで 403 FORBIDDEN (CMT-002-8)", async () => {
+    const otherManagerSession = {
+      id: 4,
+      name: "他部署 上長",
+      email: "other@test.com",
+      is_manager: true,
+    };
+    mockGetSession.mockResolvedValue(otherManagerSession); // id=4
+    mockFindUnique.mockResolvedValue(reportForManager); // managerId=1 ≠ 4
+
+    const res = await POST(
+      makePostRequest("101", { target_type: "problem", content: "コメント" }),
+      makeParams("101"),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(body.error.code).toBe("FORBIDDEN");
+  });
+});
+
+describe("POST /api/reports/[id]/comments - バリデーションエラー", () => {
+  test("target_type が不正値で 400 VALIDATION_ERROR (CMT-002-5)", async () => {
+    mockGetSession.mockResolvedValue(managerSession);
+    mockFindUnique.mockResolvedValue(reportForManager);
+
+    const res = await POST(
+      makePostRequest("101", { target_type: "visit", content: "コメント" }),
+      makeParams("101"),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  test("content が空文字で 400 VALIDATION_ERROR (CMT-002-6)", async () => {
+    mockGetSession.mockResolvedValue(managerSession);
+    mockFindUnique.mockResolvedValue(reportForManager);
+
+    const res = await POST(
+      makePostRequest("101", { target_type: "problem", content: "" }),
+      makeParams("101"),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  test("content が2001文字で 400 VALIDATION_ERROR (CMT-002-7)", async () => {
+    mockGetSession.mockResolvedValue(managerSession);
+    mockFindUnique.mockResolvedValue(reportForManager);
+
+    const res = await POST(
+      makePostRequest("101", { target_type: "problem", content: "a".repeat(2001) }),
+      makeParams("101"),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
+});
+
+describe("POST /api/reports/[id]/comments - 404 / 401", () => {
+  test("存在しない report_id で 404 NOT_FOUND (CMT-002-9)", async () => {
+    mockGetSession.mockResolvedValue(managerSession);
+    mockFindUnique.mockResolvedValue(null);
+
+    const res = await POST(
+      makePostRequest("9999", { target_type: "problem", content: "コメント" }),
+      makeParams("9999"),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(404);
+    expect(body.error.code).toBe("NOT_FOUND");
+  });
+
+  test("未認証で 401 UNAUTHORIZED が返る", async () => {
+    mockGetSession.mockResolvedValue(null);
+
+    const res = await POST(
+      makePostRequest("101", { target_type: "problem", content: "コメント" }),
+      makeParams("101"),
+    );
     const body = await res.json();
 
     expect(res.status).toBe(401);
