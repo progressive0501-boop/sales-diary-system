@@ -1,7 +1,10 @@
 import type { NextRequest } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { CustomerListQuerySchema } from "@/lib/schemas/customers";
+import {
+  CustomerListQuerySchema,
+  CreateCustomerRequestSchema,
+} from "@/lib/schemas/customers";
 
 export async function GET(request: NextRequest) {
   // ── 1. 認証 ────────────────────────────────────────────────────────────────
@@ -73,4 +76,68 @@ export async function GET(request: NextRequest) {
       },
     },
   });
+}
+
+export async function POST(request: NextRequest) {
+  // ── 1. 認証・権限確認 ──────────────────────────────────────────────────────
+  const session = await getSession();
+  if (!session) {
+    return Response.json(
+      { success: false, error: { code: "UNAUTHORIZED", message: "認証が必要です" } },
+      { status: 401 },
+    );
+  }
+  if (!session.is_manager) {
+    return Response.json(
+      { success: false, error: { code: "FORBIDDEN", message: "上長ユーザーのみ登録できます" } },
+      { status: 403 },
+    );
+  }
+
+  // ── 2. リクエストボディ検証 ──────────────────────────────────────────────
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json(
+      { success: false, error: { code: "VALIDATION_ERROR", message: "不正なJSONです" } },
+      { status: 400 },
+    );
+  }
+
+  const parsed = CreateCustomerRequestSchema.safeParse(body);
+  if (!parsed.success) {
+    return Response.json(
+      { success: false, error: { code: "VALIDATION_ERROR", message: parsed.error.message } },
+      { status: 400 },
+    );
+  }
+
+  const { name, company, phone, address, assigned_salesperson_id } = parsed.data;
+
+  // ── 3. 担当営業の存在確認 ──────────────────────────────────────────────────
+  const salesperson = await prisma.salesperson.findUnique({
+    where: { id: assigned_salesperson_id },
+    select: { id: true },
+  });
+  if (!salesperson) {
+    return Response.json(
+      { success: false, error: { code: "VALIDATION_ERROR", message: "担当営業が存在しません" } },
+      { status: 400 },
+    );
+  }
+
+  // ── 4. 顧客登録 ────────────────────────────────────────────────────────────
+  const customer = await prisma.customer.create({
+    data: {
+      name,
+      company,
+      phone: phone ?? null,
+      address: address ?? null,
+      assignedSalespersonId: assigned_salesperson_id,
+    },
+    select: { id: true, name: true, company: true },
+  });
+
+  return Response.json({ success: true, data: customer }, { status: 201 });
 }
