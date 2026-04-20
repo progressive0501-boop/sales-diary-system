@@ -4,20 +4,23 @@ import { NextRequest } from "next/server";
 
 // ── モック ────────────────────────────────────────────────────────────────────
 
-const { mockGetSession, mockCount, mockFindMany } = vi.hoisted(() => ({
+const { mockGetSession, mockCount, mockFindMany, mockFindUnique, mockCreate } = vi.hoisted(() => ({
   mockGetSession: vi.fn(),
   mockCount: vi.fn(),
   mockFindMany: vi.fn(),
+  mockFindUnique: vi.fn(),
+  mockCreate: vi.fn(),
 }));
 
 vi.mock("@/lib/auth/session", () => ({ getSession: mockGetSession }));
 vi.mock("@/lib/db", () => ({
   prisma: {
-    customer: { count: mockCount, findMany: mockFindMany },
+    customer: { count: mockCount, findMany: mockFindMany, create: mockCreate },
+    salesperson: { findUnique: mockFindUnique },
   },
 }));
 
-import { GET } from "../route";
+import { GET, POST } from "../route";
 
 // ── テスト用データ ────────────────────────────────────────────────────────────
 
@@ -166,6 +169,118 @@ describe("GET /api/customers - 認証エラー", () => {
     mockGetSession.mockResolvedValue(null);
 
     const res = await GET(makeRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(401);
+    expect(body.error.code).toBe("UNAUTHORIZED");
+  });
+});
+
+// ── CST-003：顧客登録 ─────────────────────────────────────────────────────────
+
+function makePostRequest(body: unknown) {
+  return new NextRequest(`${BASE_URL}/api/customers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+const validPostBody = {
+  name: "田中 一郎",
+  company: "株式会社A",
+  phone: "03-1234-5678",
+  address: "東京都千代田区",
+  assigned_salesperson_id: 2,
+};
+
+describe("POST /api/customers - 正常系 (CST-003)", () => {
+  test("全フィールドで顧客を登録すると 201 Created (CST-003-1)", async () => {
+    mockGetSession.mockResolvedValue(managerSession);
+    mockFindUnique.mockResolvedValue({ id: 2 });
+    mockCreate.mockResolvedValue({ id: 10, name: "田中 一郎", company: "株式会社A" });
+
+    const res = await POST(makePostRequest(validPostBody));
+    const body = await res.json();
+
+    expect(res.status).toBe(201);
+    expect(body.success).toBe(true);
+    expect(body.data).toMatchObject({ id: 10, name: "田中 一郎", company: "株式会社A" });
+  });
+
+  test("phone・address 省略でも 201 Created (CST-003-2)", async () => {
+    mockGetSession.mockResolvedValue(managerSession);
+    mockFindUnique.mockResolvedValue({ id: 2 });
+    mockCreate.mockResolvedValue({ id: 11, name: "佐藤 花子", company: "有限会社B" });
+
+    const res = await POST(
+      makePostRequest({ name: "佐藤 花子", company: "有限会社B", assigned_salesperson_id: 2 }),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(201);
+    expect(body.data.id).toBe(11);
+  });
+});
+
+describe("POST /api/customers - バリデーションエラー (CST-003)", () => {
+  test("name が空で 400 VALIDATION_ERROR (CST-003-3)", async () => {
+    mockGetSession.mockResolvedValue(managerSession);
+
+    const res = await POST(makePostRequest({ ...validPostBody, name: "" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  test("company が空で 400 VALIDATION_ERROR (CST-003-4)", async () => {
+    mockGetSession.mockResolvedValue(managerSession);
+
+    const res = await POST(makePostRequest({ ...validPostBody, company: "" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  test("assigned_salesperson_id が存在しない値で 400 VALIDATION_ERROR (CST-003-5)", async () => {
+    mockGetSession.mockResolvedValue(managerSession);
+    mockFindUnique.mockResolvedValue(null);
+
+    const res = await POST(makePostRequest({ ...validPostBody, assigned_salesperson_id: 9999 }));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  test("name が101文字で 400 VALIDATION_ERROR (CST-003-6)", async () => {
+    mockGetSession.mockResolvedValue(managerSession);
+
+    const res = await POST(makePostRequest({ ...validPostBody, name: "あ".repeat(101) }));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
+});
+
+describe("POST /api/customers - 権限エラー (CST-003)", () => {
+  test("営業ユーザーが登録すると 403 FORBIDDEN (CST-003-7)", async () => {
+    mockGetSession.mockResolvedValue(salesSession);
+
+    const res = await POST(makePostRequest(validPostBody));
+    const body = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(body.error.code).toBe("FORBIDDEN");
+  });
+
+  test("未認証で 401 UNAUTHORIZED が返る", async () => {
+    mockGetSession.mockResolvedValue(null);
+
+    const res = await POST(makePostRequest(validPostBody));
     const body = await res.json();
 
     expect(res.status).toBe(401);
