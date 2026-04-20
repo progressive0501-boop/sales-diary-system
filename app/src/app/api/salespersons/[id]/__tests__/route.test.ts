@@ -151,6 +151,25 @@ function makePutRequest(id: string, body: unknown) {
 }
 
 describe("PUT /api/salespersons/[id] - 正常系 (SLS-003)", () => {
+  test("更新リクエストにパスワードを含めても passwordHash は更新されない", async () => {
+    mockGetSession.mockResolvedValue(managerSession);
+    mockFindUnique
+      .mockResolvedValueOnce(salespersonStub)
+      .mockResolvedValueOnce({ isManager: true });
+    mockUpdate.mockResolvedValue({ id: 2, name: "山田 太郎", email: "yamada@test.com" });
+
+    // password フィールドを含めて PUT する
+    const res = await PUT(
+      makePutRequest("2", { ...validPutBody, password: "NewPass123!" }),
+      makeParams("2"),
+    );
+
+    expect(res.status).toBe(200);
+    // Prisma update の data に passwordHash が含まれていないことを確認
+    const updateArg = mockUpdate.mock.calls[0][0];
+    expect(updateArg.data).not.toHaveProperty("passwordHash");
+  });
+
   test("上長が営業情報を正常に更新すると 200 OK (SLS-003-1)", async () => {
     mockGetSession.mockResolvedValue(managerSession);
     // 1回目: findUnique（存在確認）、2回目: findUnique（manager確認）
