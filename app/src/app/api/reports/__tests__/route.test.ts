@@ -255,6 +255,27 @@ function makePostRequest(body: unknown) {
 }
 
 describe("POST /api/reports - 正常系", () => {
+  test("Problem・Plan を省略して作成すると 201 Created (RPT-003-2)", async () => {
+    mockGetSession.mockResolvedValue(salesSession);
+    mockCustomerCount.mockResolvedValue(1);
+    const createdReport = { id: 203, reportDate: new Date("2026-04-18") };
+    mockTransaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        dailyReport: { create: vi.fn().mockResolvedValue(createdReport) },
+        visitRecord: { createMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      };
+      return fn(tx);
+    });
+
+    const bodyNoProblemPlan = {
+      report_date: "2026-04-18",
+      visit_records: [{ customer_id: 1, visit_content: "訪問内容1", visit_order: 1 }],
+    };
+
+    const res = await POST(makePostRequest(bodyNoProblemPlan));
+    expect(res.status).toBe(201);
+  });
+
   test("日報が作成され 201 と { id, report_date } が返る (RPT-003-1)", async () => {
     mockGetSession.mockResolvedValue(salesSession);
     mockCustomerCount.mockResolvedValue(1);
@@ -367,7 +388,7 @@ describe("POST /api/reports - バリデーションエラー", () => {
     expect(body.error.code).toBe("VALIDATION_ERROR");
   });
 
-  test("存在しない customer_id を指定すると 400 が返る (RPT-003-5)", async () => {
+  test("存在しない customer_id を指定すると 400 が返る (RPT-003-6)", async () => {
     mockGetSession.mockResolvedValue(salesSession);
     mockCustomerCount.mockResolvedValue(0); // 0件ヒット → 存在しない
 
@@ -377,6 +398,48 @@ describe("POST /api/reports - バリデーションエラー", () => {
     expect(res.status).toBe(400);
     expect(body.error.code).toBe("VALIDATION_ERROR");
     expect(body.error.message).toMatch(/顧客ID/);
+  });
+
+  test("visit_content が空文字で 400 VALIDATION_ERROR (RPT-003-7)", async () => {
+    mockGetSession.mockResolvedValue(salesSession);
+
+    const res = await POST(
+      makePostRequest({
+        ...validBody,
+        visit_records: [{ customer_id: 1, visit_content: "", visit_order: 1 }],
+      }),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  test("visit_content が 1001 文字で 400 VALIDATION_ERROR (RPT-003-8)", async () => {
+    mockGetSession.mockResolvedValue(salesSession);
+
+    const res = await POST(
+      makePostRequest({
+        ...validBody,
+        visit_records: [{ customer_id: 1, visit_content: "a".repeat(1001), visit_order: 1 }],
+      }),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  test("problem が 2001 文字で 400 VALIDATION_ERROR (RPT-003-9)", async () => {
+    mockGetSession.mockResolvedValue(salesSession);
+
+    const res = await POST(
+      makePostRequest({ ...validBody, problem: "a".repeat(2001) }),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
   });
 });
 
