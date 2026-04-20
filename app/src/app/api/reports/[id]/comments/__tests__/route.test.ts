@@ -96,7 +96,7 @@ describe("GET /api/reports/[id]/comments - 正常系", () => {
     expect(body.data.plan).toHaveLength(0);
   });
 
-  test("plan コメントも分類されて返る (CMT-001-2)", async () => {
+  test("plan コメントも problem/plan に正しく分類されて返る", async () => {
     mockGetSession.mockResolvedValue(salesSession);
     mockFindUnique.mockResolvedValue(reportStub);
     mockFindMany.mockResolvedValue([
@@ -126,7 +126,7 @@ describe("GET /api/reports/[id]/comments - 正常系", () => {
     expect(body.data.plan).toEqual([]);
   });
 
-  test("上長が配下の日報のコメントを取得できる", async () => {
+  test("上長が配下の日報のコメントを取得できる (CMT-001-2)", async () => {
     mockGetSession.mockResolvedValue(managerSession);
     mockFindUnique.mockResolvedValue(reportStub);
     mockFindMany.mockResolvedValue([
