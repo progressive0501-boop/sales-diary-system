@@ -73,17 +73,16 @@ describe("AUTH-003：ログアウト", () => {
     expect(body.error.code).toBe("UNAUTHORIZED");
   });
 
-  test("トークンなしでログアウトエンドポイントにアクセスすると 401 UNAUTHORIZED (AUTH-003-3)", async () => {
-    // proxy が /api/auth/logout へのアクセスをトークンなしで拒否する
+  test("トークンなしでもログアウトエンドポイントは proxy を通過できる (AUTH-003-3)", async () => {
+    // /api/auth/logout は PUBLIC_PATHS に含まれるため、
+    // トークンなしでも proxy は NextResponse.next() を返す（認証不要）
     const req = new NextRequest(`${BASE_URL}/api/auth/logout`, {
       method: "POST",
     });
     const res = await proxy(req);
-    const body = await res.json();
 
-    expect(res.status).toBe(401);
-    expect(body.success).toBe(false);
-    expect(body.error.code).toBe("UNAUTHORIZED");
+    // パブリックパスなので 401 にならない
+    expect(res.status).not.toBe(401);
   });
 
   test("有効なトークンがあれば logout エンドポイントを proxy が通過させる", async () => {
